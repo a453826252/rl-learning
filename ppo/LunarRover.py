@@ -4,7 +4,7 @@ import torch.nn as nn
 import gymnasium as gym
 from torch.utils.tensorboard import SummaryWriter
 
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger = SummaryWriter("logs")
 class PPOMemory():
     def __init__(self):
@@ -29,11 +29,11 @@ class PPOMemory():
         self.rewards.append(reward)
 
     def sample(self):
-        states = torch.FloatTensor(np.array(self.states))
-        actions = torch.FloatTensor(np.array(self.actions))
-        log_probs = torch.FloatTensor(np.array(self.log_probs))
-        values = torch.FloatTensor(np.array(self.values))
-        rewards = torch.FloatTensor(np.array(self.rewards))
+        states = torch.FloatTensor(np.array(self.states)).to(device)
+        actions = torch.FloatTensor(np.array(self.actions)).to(device)
+        log_probs = torch.FloatTensor(np.array(self.log_probs)).to(device)
+        values = torch.FloatTensor(np.array(self.values)).to(device)
+        rewards = torch.FloatTensor(np.array(self.rewards)).to(device)
         return states,actions,log_probs,values,rewards
 
 class AC:
@@ -45,14 +45,14 @@ class AC:
             nn.ReLU(),
             nn.Linear(128, action_dim),
             nn.Softmax(dim=-1)
-        )
+        ).to(device)
         self.critic = nn.Sequential(
             nn.Linear(state_dim, 128),
             nn.Tanh(),
             nn.Linear(128, 128),
             nn.Tanh(),
             nn.Linear(128, 1)
-        )
+        ).to(device)
     def get_action_and_value(self,x):
         action_prob = self.actor(x)
         dist = torch.distributions.Categorical(action_prob)
@@ -76,7 +76,7 @@ class PPO():
         self.batch_size = batch_size
         self.ac_optimizer = torch.optim.Adam([
                         {'params': self.ac.actor.parameters(), 'lr': 0.001},
-                        {'params': self.ac.critic.parameters(), 'lr': 0.0003}
+                        {'params': self.ac.critic.parameters(), 'lr': 3e-4}
                     ])
         self.memory = PPOMemory()
         self.mse_loss = nn.MSELoss()
@@ -88,7 +88,7 @@ class PPO():
         self.memory.clear_memory()
 
     def choose_action(self,state):
-        state = torch.FloatTensor(state).unsqueeze(0)  # 添加batch维度，因为模型的输入是(batch_size, state_dim)
+        state = torch.FloatTensor(state).unsqueeze(0).to(device) # 添加batch维度，因为模型的输入是(batch_size, state_dim)
         with torch.no_grad():  # 不计算梯度，因为我们只需要得到动作，不需要反向传播
             action,log_prob,value = self.ac.get_action_and_value(state)
         return action.item(),log_prob.item(),value.item()
@@ -139,8 +139,10 @@ def train():
     env = gym.make('LunarLander-v3')
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
-    ppo = PPO(state_dim, action_dim,0.99,0.2,80,64)
-    for episode in range(200):
+    ppo = PPO(state_dim, action_dim,0.99,0.2,10,64)
+    compeleteCount = 0
+    episode = 0
+    while compeleteCount < 5:
         state,_ = env.reset()
         done = False
         truncated = False
@@ -151,15 +153,20 @@ def train():
             ppo.add_memory(state,action,log_prob,value,reward)
             state = next_state
             total_reward += reward
+        episode += 1
+        if total_reward > 200:
+            compeleteCount += 1
+        else:
+            compeleteCount = 0
         ave_loss = ppo.update()
         ppo.clear_memory()
         logger.add_scalar("reward",total_reward,episode)
         logger.add_scalar("loss",ave_loss,episode)
-        if episode % 10 == 0:
-            print(f"Episode {episode}, Total Reward: {total_reward},loss:{ave_loss}")
-        
+        print(f"Episode {episode}, Total Reward: {total_reward},loss:{ave_loss}")
+            
         if episode % 100 == 0:
             ppo.save()  # 保存模型参数
+    ppo.save()  # 保存模型参数
     env.close()
     logger.close()
 
@@ -176,5 +183,5 @@ def test():
         next_state,reward,done,_,_ = env.step(action)
         state = next_state
 if __name__ == "__main__":
-    # train()
-    test()
+    train()
+    # test()
